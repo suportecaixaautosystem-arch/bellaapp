@@ -1,46 +1,88 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Card from '../../components/Card';
-import { BarChart2, Filter, Printer, FileDown, MessageSquare } from 'lucide-react';
-import { mockSales } from '../../data/mockSales';
-import { initialClients } from '../../data/mockClients';
+import { BarChart2, Filter, Printer, FileDown, MessageSquare, Loader } from 'lucide-react';
+import { supabase } from '../../lib/supabaseClient';
+import { Tables } from '../../types/database.types';
 import { exportToPdf, shareToWhatsApp } from '../../utils/reportExporter';
+
+type SaleWithDetails = Tables<'sales'> & {
+  clients: Pick<Tables<'clients'>, 'name'> | null;
+  employees: Pick<Tables<'employees'>, 'name'> | null;
+  payment_methods: Pick<Tables<'payment_methods'>, 'name'> | null;
+  sale_items: (Pick<Tables<'sale_items'>, 'item_name'> & {
+      services: Pick<Tables<'services'>, 'name'> | null;
+      products: Pick<Tables<'products'>, 'name'> | null;
+  })[];
+};
 
 type GroupByOption = 'day' | 'paymentMethod' | 'client' | 'employee' | 'service' | 'product';
 
 const SalesReport: React.FC = () => {
+  const [loading, setLoading] = useState(true);
+  const [sales, setSales] = useState<SaleWithDetails[]>([]);
   const [filters, setFilters] = useState({
-    startDate: '2025-08-01',
-    endDate: '2025-08-31',
+    startDate: new Date(new Date().setDate(1)).toISOString().split('T')[0],
+    endDate: new Date().toISOString().split('T')[0],
     groupBy: 'day' as GroupByOption,
   });
+
+  useEffect(() => {
+    const fetchSales = async () => {
+        setLoading(true);
+        const { data, error } = await supabase
+            .from('sales')
+            .select(`
+                *,
+                clients (name),
+                employees (name),
+                payment_methods (name),
+                sale_items (item_name, services(name), products(name))
+            `);
+        if (error) alert('Erro ao buscar vendas.');
+        else setSales(data as any || []);
+        setLoading(false);
+    };
+    fetchSales();
+  }, []);
 
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
   const filteredSales = useMemo(() => {
-    return mockSales.filter(sale => {
-      const saleDate = sale.date;
+    return sales.filter(sale => {
+      if (!sale.created_at) return false;
+      const saleDate = new Date(sale.created_at);
       const start = new Date(filters.startDate);
       const end = new Date(filters.endDate);
       end.setHours(23, 59, 59, 999);
       return saleDate >= start && saleDate <= end;
     });
-  }, [filters.startDate, filters.endDate]);
+  }, [sales, filters.startDate, filters.endDate]);
 
   const reportData = useMemo(() => {
-    const groupedData: Record<string, { count: number; total: number; items: any[] }> = {};
+    const groupedData: Record<string, { count: number; total: number; }> = {};
     filteredSales.forEach(sale => {
-      let key = '';
+      let keys: string[] = [];
       switch (filters.groupBy) {
-        case 'day': key = sale.date.toLocaleDateString('pt-BR'); break;
-        case 'paymentMethod': key = sale.paymentMethod; break;
-        case 'client': key = initialClients.find(c => c.id === sale.clientId)?.name || 'Consumidor Final'; break;
-        default: key = sale.date.toLocaleDateString('pt-BR');
+        case 'day': keys.push(new Date(sale.created_at!).toLocaleDateString('pt-BR')); break;
+        case 'paymentMethod': keys.push(sale.payment_methods?.name || 'N/A'); break;
+        case 'client': keys.push(sale.clients?.name || 'Consumidor Final'); break;
+        case 'employee': keys.push(sale.employees?.name || 'N/A'); break;
+        case 'service':
+        case 'product':
+            sale.sale_items.forEach(item => {
+                if (filters.groupBy === 'service' && item.services) keys.push(item.services.name);
+                if (filters.groupBy === 'product' && item.products) keys.push(item.products.name);
+            });
+            break;
+        default: keys.push(new Date(sale.created_at!).toLocaleDateString('pt-BR'));
       }
-      if (!groupedData[key]) groupedData[key] = { count: 0, total: 0, items: [] };
-      groupedData[key].count++;
-      groupedData[key].total += sale.total;
+      keys.forEach(key => {
+        if (!groupedData[key]) groupedData[key] = { count: 0, total: 0 };
+        groupedData[key].count++;
+        groupedData[key].total += sale.total;
+      });
     });
     return Object.entries(groupedData).map(([key, value]) => ({ key, ...value })).sort((a,b) => b.total - a.total);
   }, [filteredSales, filters.groupBy]);
@@ -54,6 +96,9 @@ const SalesReport: React.FC = () => {
           case 'day': return ['Data', 'Nº de Vendas', 'Valor Total (R$)'];
           case 'paymentMethod': return ['Forma de Pagamento', 'Nº de Vendas', 'Valor Total (R$)'];
           case 'client': return ['Cliente', 'Nº de Vendas', 'Valor Total (R$)'];
+          case 'employee': return ['Funcionário', 'Nº de Vendas', 'Valor Total (R$)'];
+          case 'service': return ['Serviço', 'Nº de Vendas', 'Valor Total (R$)'];
+          case 'product': return ['Produto', 'Nº de Vendas', 'Valor Total (R$)'];
           default: return ['Data', 'Nº de Vendas', 'Valor Total (R$)'];
       }
   }
@@ -109,8 +154,8 @@ const SalesReport: React.FC = () => {
               <option value="paymentMethod">Forma de Pagamento</option>
               <option value="client">Cliente</option>
               <option value="employee">Funcionário</option>
-              <option value="service">Serviço mais vendido</option>
-              <option value="product">Produto mais vendido</option>
+              <option value="service">Serviço</option>
+              <option value="product">Produto</option>
             </select>
           </div>
         </div>
@@ -124,6 +169,7 @@ const SalesReport: React.FC = () => {
 
       <Card>
         <h2 className="text-lg font-semibold text-white mb-4 flex items-center"><BarChart2 className="h-5 w-5 mr-2 text-cyan-400" />Resultados</h2>
+        {loading ? <div className="text-center p-8"><Loader className="animate-spin h-6 w-6 mx-auto"/></div> :
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
@@ -141,7 +187,7 @@ const SalesReport: React.FC = () => {
               ))}
             </tbody>
           </table>
-        </div>
+        </div>}
       </Card>
     </div>
   );

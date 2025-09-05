@@ -1,61 +1,71 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Card from '../../components/Card';
-import { Filter, Printer, FileDown, BarChart2, Users, Scissors, Package, Briefcase, MessageSquare } from 'lucide-react';
-import { initialClients } from '../../data/mockClients';
-import { initialProducts } from '../../data/mockProducts';
-import { initialServices } from '../../data/mockServices';
-import { initialEmployees } from '../../data/mockEmployees';
+import { Filter, Printer, FileDown, BarChart2, Users, Scissors, Package, Briefcase, MessageSquare, Loader } from 'lucide-react';
+import { supabase } from '../../lib/supabaseClient';
+import { Tables } from '../../types/database.types';
 import { exportToPdf, shareToWhatsApp } from '../../utils/reportExporter';
 
 type RegistrationType = 'clients' | 'products' | 'services' | 'employees';
 
 const RegistrationsReport: React.FC = () => {
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<any[]>([]);
   const [filters, setFilters] = useState({
     type: 'clients' as RegistrationType,
     status: 'all',
   });
 
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      const { data, error } = await supabase.from(filters.type).select('*');
+      if (error) alert(`Erro ao buscar ${filters.type}`);
+      else setData(data || []);
+      setLoading(false);
+    };
+    fetchData();
+  }, [filters.type]);
+
   const handleFilterChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const { data, headers, total } = useMemo(() => {
-    let rawData: any[] = [];
-    let headers: string[] = [];
-    
-    switch (filters.type) {
-      case 'clients': rawData = initialClients; headers = ['Nome', 'Email', 'Telefone', 'Status']; break;
-      case 'products': rawData = initialProducts; headers = ['Nome', 'Preço Venda', 'Estoque', 'Status']; break;
-      case 'services': rawData = initialServices; headers = ['Nome', 'Duração', 'Preço', 'Status']; break;
-      case 'employees': rawData = initialEmployees; headers = ['Nome', 'Email', 'Telefone', 'Status']; break;
-    }
-
-    const filtered = rawData.filter(item => {
+  const filteredData = useMemo(() => {
+    return data.filter(item => {
       if (filters.status === 'all') return true;
-      return filters.status === 'active' ? item.active : !item.active;
+      return filters.status === 'active' ? item.is_active : !item.is_active;
     });
+  }, [data, filters.status]);
 
-    return { data: filtered, headers, total: filtered.length };
-  }, [filters]);
+  const { headers, total } = useMemo(() => {
+    let headers: string[] = [];
+    switch (filters.type) {
+      case 'clients': headers = ['Nome', 'Email', 'Telefone', 'Status']; break;
+      case 'products': headers = ['Nome', 'Preço Venda', 'Estoque', 'Status']; break;
+      case 'services': headers = ['Nome', 'Duração (min)', 'Preço', 'Status']; break;
+      case 'employees': headers = ['Nome', 'Email', 'Telefone', 'Status']; break;
+    }
+    return { headers, total: filteredData.length };
+  }, [filters.type, filteredData]);
 
   const renderRow = (item: any) => {
     switch (filters.type) {
       case 'clients': return <><td className="p-4 text-white">{item.name}</td><td className="p-4 text-white">{item.email}</td><td className="p-4 text-white">{item.phone}</td></>;
-      case 'products': return <><td className="p-4 text-white">{item.name}</td><td className="p-4 text-green-400">R$ {item.salePrice}</td><td className="p-4 text-white">{item.controlStock ? item.stock : 'N/A'}</td></>;
-      case 'services': return <><td className="p-4 text-white">{item.name}</td><td className="p-4 text-white">{item.duration}</td><td className="p-4 text-green-400">R$ {item.price}</td></>;
+      case 'products': return <><td className="p-4 text-white">{item.name}</td><td className="p-4 text-green-400">R$ {item.sale_price.toFixed(2)}</td><td className="p-4 text-white">{item.control_stock ? item.stock_quantity : 'N/A'}</td></>;
+      case 'services': return <><td className="p-4 text-white">{item.name}</td><td className="p-4 text-white">{item.duration_minutes}</td><td className="p-4 text-green-400">R$ {item.price.toFixed(2)}</td></>;
       case 'employees': return <><td className="p-4 text-white">{item.name}</td><td className="p-4 text-white">{item.email}</td><td className="p-4 text-white">{item.phone}</td></>;
       default: return null;
     }
   };
 
   const handleExportPdf = () => {
-    const title = `Relatório de ${filters.type.charAt(0).toUpperCase() + filters.type.slice(1)}`;
-    const pdfData = data.map(item => {
+    const title = `Relatório de ${filters.type}`;
+    const pdfData = filteredData.map(item => {
         switch(filters.type) {
-            case 'clients': return [item.name, item.email, item.phone, item.active ? 'Ativo' : 'Inativo'];
-            case 'products': return [item.name, `R$ ${item.salePrice}`, item.controlStock ? item.stock : 'N/A', item.active ? 'Ativo' : 'Inativo'];
-            case 'services': return [item.name, item.duration, `R$ ${item.price}`, item.active ? 'Ativo' : 'Inativo'];
-            case 'employees': return [item.name, item.email, item.phone, item.active ? 'Ativo' : 'Inativo'];
+            case 'clients': return [item.name, item.email, item.phone, item.is_active ? 'Ativo' : 'Inativo'];
+            case 'products': return [item.name, `R$ ${item.sale_price.toFixed(2)}`, item.control_stock ? item.stock_quantity : 'N/A', item.is_active ? 'Ativo' : 'Inativo'];
+            case 'services': return [item.name, item.duration_minutes, `R$ ${item.price.toFixed(2)}`, item.is_active ? 'Ativo' : 'Inativo'];
+            case 'employees': return [item.name, item.email, item.phone, item.is_active ? 'Ativo' : 'Inativo'];
             default: return [];
         }
     });
@@ -66,10 +76,8 @@ const RegistrationsReport: React.FC = () => {
     let text = `*Relatório de ${filters.type}*\n\n`;
     text += `*Total de Itens:* ${total}\n`;
     text += `*Status:* ${filters.status === 'all' ? 'Todos' : filters.status === 'active' ? 'Ativos' : 'Inativos'}\n\n`;
-    data.slice(0, 15).forEach(item => {
-        text += `- ${item.name}\n`;
-    });
-    if (data.length > 15) text += `... e mais ${data.length - 15} itens.\n`;
+    filteredData.slice(0, 15).forEach(item => { text += `- ${item.name}\n`; });
+    if (filteredData.length > 15) text += `... e mais ${filteredData.length - 15} itens.\n`;
     shareToWhatsApp(text);
   };
 
@@ -121,6 +129,7 @@ const RegistrationsReport: React.FC = () => {
                 <p className="text-2xl font-bold text-white">{total}</p>
             </div>
         </div>
+        {loading ? <div className="text-center p-8"><Loader className="animate-spin h-6 w-6 mx-auto"/></div> :
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
@@ -129,19 +138,19 @@ const RegistrationsReport: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {data.map((item) => (
+              {filteredData.map((item) => (
                 <tr key={item.id} className="border-b border-gray-800 hover:bg-gray-800/50">
                   {renderRow(item)}
                   <td className="p-4">
-                    <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${item.active ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}`}>
-                      {item.active ? 'Ativo' : 'Inativo'}
+                    <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${item.is_active ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}`}>
+                      {item.is_active ? 'Ativo' : 'Inativo'}
                     </span>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+        </div>}
       </Card>
     </div>
   );

@@ -2,25 +2,34 @@ import React, { useState, useEffect } from 'react';
 import Card from '../../components/Card';
 import { Plus, Edit, Trash2, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { initialSpecialties as mockSpecialties } from '../../data/mockSpecialties';
+import { supabase } from '../../lib/supabaseClient';
+import { Tables, TablesInsert } from '../../types/database.types';
 
-interface Specialty {
-  id: number;
-  name: string;
-  description: string;
-  active: boolean;
-}
+type Specialty = Tables<'specialties'>;
 
 const Specialties: React.FC = () => {
-  const [specialties, setSpecialties] = useState<Specialty[]>(mockSpecialties);
+  const [specialties, setSpecialties] = useState<Specialty[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSpecialty, setEditingSpecialty] = useState<Specialty | null>(null);
-  const [newSpecialty, setNewSpecialty] = useState({ name: '', description: '' });
+  const [newSpecialty, setNewSpecialty] = useState<Omit<TablesInsert<'specialties'>, 'id' | 'company_id' | 'created_at' | 'is_active'>>({ name: '', description: '' });
   const [errors, setErrors] = useState({ name: '' });
+
+  const fetchSpecialties = async () => {
+    setLoading(true);
+    const { data, error } = await supabase.from('specialties').select('*').order('name');
+    if (error) console.error('Error fetching specialties:', error);
+    else setSpecialties(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchSpecialties();
+  }, []);
 
   useEffect(() => {
     if (editingSpecialty) {
-      setNewSpecialty({ name: editingSpecialty.name, description: editingSpecialty.description });
+      setNewSpecialty({ name: editingSpecialty.name, description: editingSpecialty.description || '' });
     } else {
       setNewSpecialty({ name: '', description: '' });
     }
@@ -45,26 +54,34 @@ const Specialties: React.FC = () => {
     return isValid;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
 
+    const specialtyData = { ...newSpecialty, company_id: 1 };
+
     if (editingSpecialty) {
-      setSpecialties(specialties.map(s => s.id === editingSpecialty.id ? { ...editingSpecialty, ...newSpecialty } : s));
+      const { error } = await supabase.from('specialties').update(specialtyData).eq('id', editingSpecialty.id);
+      if (error) alert(`Erro ao atualizar especialidade: ${error.message}`);
     } else {
-      const specialtyToAdd: Specialty = { id: Date.now(), ...newSpecialty, active: true };
-      setSpecialties(prev => [specialtyToAdd, ...prev]);
+      const { error } = await supabase.from('specialties').insert(specialtyData);
+      if (error) alert(`Erro ao criar especialidade: ${error.message}`);
     }
     closeModal();
+    fetchSpecialties();
   };
 
-  const handleToggleActive = (id: number) => {
-    setSpecialties(specialties.map(s => s.id === id ? { ...s, active: !s.active } : s));
+  const handleToggleActive = async (id: number, currentStatus: boolean) => {
+    const { error } = await supabase.from('specialties').update({ is_active: !currentStatus }).eq('id', id);
+    if (error) alert(`Erro ao alterar status: ${error.message}`);
+    else fetchSpecialties();
   };
 
-  const handleDelete = (id: number) => {
+  const handleDelete = async (id: number) => {
     if (window.confirm('Tem certeza que deseja excluir esta especialidade?')) {
-      setSpecialties(specialties.filter(s => s.id !== id));
+      const { error } = await supabase.from('specialties').delete().eq('id', id);
+      if (error) alert(`Erro ao excluir especialidade: ${error.message}`);
+      else fetchSpecialties();
     }
   };
 
@@ -76,8 +93,6 @@ const Specialties: React.FC = () => {
   const closeModal = () => {
     setIsModalOpen(false);
     setEditingSpecialty(null);
-    setNewSpecialty({ name: '', description: '' });
-    setErrors({ name: '' });
   };
 
   return (
@@ -97,6 +112,7 @@ const Specialties: React.FC = () => {
       </div>
 
       <Card>
+        {loading ? <p>Carregando...</p> : (
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
@@ -109,12 +125,12 @@ const Specialties: React.FC = () => {
             </thead>
             <tbody>
               {specialties.map((specialty) => (
-                <tr key={specialty.id} className={`border-b border-gray-800 hover:bg-gray-800/50 ${!specialty.active ? 'opacity-50' : ''}`}>
+                <tr key={specialty.id} className={`border-b border-gray-800 hover:bg-gray-800/50 ${!specialty.is_active ? 'opacity-50' : ''}`}>
                   <td className="p-4 text-white font-medium">{specialty.name}</td>
                   <td className="p-4 text-gray-300">{specialty.description}</td>
                   <td className="p-4">
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" checked={specialty.active} onChange={() => handleToggleActive(specialty.id)} className="sr-only peer" />
+                      <input type="checkbox" checked={specialty.is_active ?? false} onChange={() => handleToggleActive(specialty.id, specialty.is_active ?? false)} className="sr-only peer" />
                       <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-sky-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
                     </label>
                   </td>
@@ -129,6 +145,7 @@ const Specialties: React.FC = () => {
             </tbody>
           </table>
         </div>
+        )}
       </Card>
 
       <AnimatePresence>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -23,8 +23,12 @@ import {
   BarChart2,
   Download,
   Bot,
-  Award
+  Award,
+  LogOut,
+  Shield
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { Tables } from '../types/database.types';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -35,6 +39,7 @@ interface SubMenuItem {
   icon: React.ElementType;
   label: string;
   path: string;
+  allowedRoles?: Array<Tables<'profiles'>['role']>;
 }
 
 interface MenuItem {
@@ -42,6 +47,7 @@ interface MenuItem {
   label: string;
   path?: string;
   subItems?: SubMenuItem[];
+  allowedRoles?: Array<Tables<'profiles'>['role']>;
 }
 
 const menuItems: MenuItem[] = [
@@ -58,6 +64,7 @@ const menuItems: MenuItem[] = [
   { 
     icon: DollarSign, 
     label: 'Financeiro', 
+    allowedRoles: ['admin', 'manager'],
     subItems: [
       { icon: DollarSign, label: 'Painel', path: '/financial' },
       { icon: Users, label: 'Contas a Pagar', path: '/financial/accounts-payable' },
@@ -67,6 +74,7 @@ const menuItems: MenuItem[] = [
   {
     icon: BarChart2,
     label: 'Relatórios',
+    allowedRoles: ['admin', 'manager'],
     subItems: [
         { icon: BarChart2, label: 'Painel Geral', path: '/reports' },
         { icon: ShoppingCart, label: 'Vendas', path: '/reports/sales' },
@@ -85,32 +93,40 @@ const menuItems: MenuItem[] = [
         { icon: Package, label: 'Produtos', path: '/registrations/products' },
     ]
   },
-  { icon: Bot, label: 'WhatsApp Bot', path: '/whatsapp-bot' },
-  { icon: Download, label: 'Backup', path: '/backup' },
+  { icon: Bot, label: 'WhatsApp Bot', path: '/whatsapp-bot', allowedRoles: ['admin', 'manager'] },
+  { icon: Download, label: 'Backup', path: '/backup', allowedRoles: ['admin', 'manager'] },
   {
     icon: Settings,
     label: 'Configurações',
+    allowedRoles: ['admin', 'manager'],
     subItems: [
         { icon: Building, label: 'Empresa', path: '/configurations/company' },
         { icon: Briefcase, label: 'Funcionários', path: '/configurations/employees' },
+        { icon: Shield, label: 'Usuários', path: '/configurations/users' },
         { icon: Star, label: 'Especialidades', path: '/configurations/specialties' },
         { icon: CreditCard, label: 'Formas de Pag.', path: '/configurations/payment-methods' },
     ]
   },
 ];
 
-const CollapsibleMenuItem: React.FC<{ item: MenuItem; location: any; onClose: () => void; isOpen: boolean; onToggle: () => void; }> = ({ item, location, onClose, isOpen, onToggle }) => {
+const ExpandedMenuItem: React.FC<{ item: MenuItem; location: any; onClose: () => void; }> = ({ item, location, onClose }) => {
+  const { profile } = useAuth();
   const isActive = item.subItems?.some(sub => sub.path === '/' ? location.pathname === '/' : location.pathname.startsWith(sub.path));
+
+  const filteredSubItems = item.subItems?.filter(subItem => 
+    !subItem.allowedRoles || (profile && subItem.allowedRoles.includes(profile.role))
+  );
+
+  if (!filteredSubItems || filteredSubItems.length === 0) return null;
 
   return (
     <li>
-      <button
-        onClick={onToggle}
+      <div
         className={`
-          flex items-center justify-between w-full px-4 py-3 rounded-lg transition-all duration-200
+          flex items-center justify-between w-full px-4 py-3 rounded-lg
           ${isActive 
-            ? 'bg-gray-800 text-white' 
-            : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+            ? 'bg-gray-850 text-white' 
+            : 'text-gray-300'
           }
         `}
       >
@@ -118,60 +134,42 @@ const CollapsibleMenuItem: React.FC<{ item: MenuItem; location: any; onClose: ()
           <item.icon className="h-5 w-5" />
           <span className="font-medium">{item.label}</span>
         </div>
-        <ChevronDown className={`h-5 w-5 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`} />
-      </button>
-      <AnimatePresence>
-        {isOpen && (
-          <motion.ul
-            className="pl-6 mt-1 space-y-1 overflow-hidden"
-            initial={{ height: 0 }}
-            animate={{ height: 'auto' }}
-            exit={{ height: 0 }}
-            transition={{ duration: 0.3 }}
-          >
-            {item.subItems?.map(subItem => {
-              const isSubActive = location.pathname === subItem.path;
-              return (
-                <li key={subItem.path}>
-                  <Link
-                    to={subItem.path}
-                    onClick={onClose}
-                    className={`
-                      flex items-center space-x-3 pl-5 pr-4 py-2.5 rounded-lg transition-all duration-200 text-sm
-                      ${isSubActive
-                        ? 'bg-gradient-to-r from-sky-600 to-cyan-500 text-white shadow-sm'
-                        : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-                      }
-                    `}
-                  >
-                    <subItem.icon className="h-4 w-4" />
-                    <span>{subItem.label}</span>
-                  </Link>
-                </li>
-              );
-            })}
-          </motion.ul>
-        )}
-      </AnimatePresence>
+        <ChevronDown className="h-5 w-5 rotate-180" />
+      </div>
+      <ul className="pl-6 mt-1 space-y-1">
+        {filteredSubItems.map(subItem => {
+          const isSubActive = location.pathname === subItem.path;
+          return (
+            <li key={subItem.path}>
+              <Link
+                to={subItem.path}
+                onClick={onClose}
+                className={`
+                  flex items-center space-x-3 pl-5 pr-4 py-2.5 rounded-lg transition-all duration-200 text-sm
+                  ${isSubActive
+                    ? 'bg-gradient-to-r from-sky-600 to-cyan-500 text-white shadow-sm'
+                    : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+                  }
+                `}
+              >
+                <subItem.icon className="h-4 w-4" />
+                <span>{subItem.label}</span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
     </li>
   );
 };
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
   const location = useLocation();
-  const [openMenus, setOpenMenus] = useState<string[]>([]);
+  const { signOut, profile } = useAuth();
 
-  useEffect(() => {
-    const activeMenu = menuItems.find(item => item.subItems?.some(sub => sub.path === '/' ? location.pathname === '/' : location.pathname.startsWith(sub.path)));
-    if (activeMenu && !openMenus.includes(activeMenu.label)) {
-      setOpenMenus(prev => [...new Set([...prev, activeMenu.label])]);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname]);
-
-  const toggleMenu = (label: string) => {
-    setOpenMenus(prev => prev.includes(label) ? prev.filter(m => m !== label) : [...prev, label]);
-  };
+  const filteredMenuItems = menuItems.filter(item => 
+    !item.allowedRoles || (profile && item.allowedRoles.includes(profile.role))
+  );
 
   return (
     <>
@@ -221,15 +219,13 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
 
         <nav className="flex-1 p-4 overflow-y-auto">
           <ul className="space-y-2">
-            {menuItems.map((item) => 
+            {filteredMenuItems.map((item) => 
               item.subItems ? (
-                <CollapsibleMenuItem 
+                <ExpandedMenuItem 
                   key={item.label}
                   item={item}
                   location={location}
                   onClose={onClose}
-                  isOpen={openMenus.includes(item.label)}
-                  onToggle={() => toggleMenu(item.label)}
                 />
               ) : (
                 <li key={item.path}>
@@ -250,6 +246,15 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
                 </li>
               )
             )}
+            <li>
+              <button
+                onClick={signOut}
+                className="flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 w-full text-red-400 hover:bg-red-900/50 hover:text-red-300"
+              >
+                <LogOut className="h-5 w-5" />
+                <span className="font-medium">Sair</span>
+              </button>
+            </li>
           </ul>
         </nav>
         

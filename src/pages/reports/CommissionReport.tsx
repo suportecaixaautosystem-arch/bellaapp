@@ -1,9 +1,12 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Card from '../../components/Card';
-import { Filter, Printer, FileDown, BarChart2, Award, MessageSquare } from 'lucide-react';
-import { mockSales, Sale } from '../../data/mockSales';
-import { initialEmployees, Employee } from '../../data/mockEmployees';
+import { Filter, Printer, FileDown, BarChart2, Award, MessageSquare, Loader } from 'lucide-react';
+import { supabase } from '../../lib/supabaseClient';
+import { Tables } from '../../types/database.types';
 import { exportToPdf, shareToWhatsApp } from '../../utils/reportExporter';
+
+type SaleWithItems = Tables<'sales'> & { sale_items: Tables<'sale_items'>[] };
+type Employee = Tables<'employees'>;
 
 type CommissionData = {
     employeeId: number;
@@ -15,30 +18,46 @@ type CommissionData = {
 };
 
 const CommissionReport: React.FC = () => {
+  const [loading, setLoading] = useState(true);
+  const [sales, setSales] = useState<SaleWithItems[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [filters, setFilters] = useState({
-    startDate: '2025-08-01',
-    endDate: '2025-08-31',
+    startDate: new Date(new Date().setDate(1)).toISOString().split('T')[0],
+    endDate: new Date().toISOString().split('T')[0],
     employeeId: 'all',
   });
+
+  useEffect(() => {
+    const fetchData = async () => {
+        setLoading(true);
+        const salesPromise = supabase.from('sales').select('*, sale_items(*)');
+        const employeesPromise = supabase.from('employees').select('*');
+        const [{data: salesData}, {data: empData}] = await Promise.all([salesPromise, employeesPromise]);
+        setSales(salesData as any || []);
+        setEmployees(empData || []);
+        setLoading(false);
+    };
+    fetchData();
+  }, []);
 
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
   const filteredSales = useMemo(() => {
-    return mockSales.filter(sale => {
-      const saleDate = sale.date;
+    return sales.filter(sale => {
+      const saleDate = new Date(sale.created_at!);
       const start = new Date(filters.startDate);
       const end = new Date(filters.endDate);
       end.setHours(23, 59, 59, 999);
       return saleDate >= start && saleDate <= end;
     });
-  }, [filters.startDate, filters.endDate]);
+  }, [sales, filters.startDate, filters.endDate]);
 
   const reportData = useMemo(() => {
     const commissionMap: Record<number, CommissionData> = {};
 
-    initialEmployees.forEach(emp => {
+    employees.forEach(emp => {
         if (filters.employeeId === 'all' || filters.employeeId === emp.id.toString()) {
             commissionMap[emp.id] = {
                 employeeId: emp.id,
@@ -52,30 +71,30 @@ const CommissionReport: React.FC = () => {
     });
 
     filteredSales.forEach(sale => {
-      sale.items.forEach(item => {
-        if (item.employeeId && commissionMap[item.employeeId]) {
-          const employee = initialEmployees.find(e => e.id === item.employeeId);
-          if (!employee) return;
+        const employee = employees.find(e => e.id === sale.employee_id);
+        if (!employee || !commissionMap[employee.id]) return;
 
-          commissionMap[item.employeeId].totalSales += item.price * item.quantity;
-          
-          let commissionValue = 0;
-          if (item.type === 'service' || item.type === 'combo') {
-            const commissionRate = parseFloat(employee.serviceCommission) / 100;
-            commissionValue = item.price * item.quantity * commissionRate;
-            commissionMap[item.employeeId].serviceCommission += commissionValue;
-          } else if (item.type === 'product') {
-            const commissionRate = parseFloat(employee.productCommission) / 100;
-            commissionValue = item.price * item.quantity * commissionRate;
-            commissionMap[item.employeeId].productCommission += commissionValue;
-          }
-          commissionMap[item.employeeId].totalCommission += commissionValue;
-        }
-      });
+        commissionMap[employee.id].totalSales += sale.total;
+        
+        let serviceComm = 0;
+        let productComm = 0;
+
+        sale.sale_items.forEach(item => {
+            if(item.service_id || item.service_combo_id) {
+                serviceComm += item.total_price * (employee.service_commission / 100);
+            }
+            if(item.product_id || item.product_combo_id) {
+                productComm += item.total_price * (employee.product_commission / 100);
+            }
+        });
+        
+        commissionMap[employee.id].serviceCommission += serviceComm;
+        commissionMap[employee.id].productCommission += productComm;
+        commissionMap[employee.id].totalCommission += serviceComm + productComm;
     });
 
     return Object.values(commissionMap).sort((a,b) => b.totalCommission - a.totalCommission);
-  }, [filteredSales, filters.employeeId]);
+  }, [filteredSales, filters.employeeId, employees]);
   
   const grandTotals = useMemo(() => {
     return reportData.reduce((acc, data) => {
@@ -139,7 +158,7 @@ const CommissionReport: React.FC = () => {
             <label className="block text-sm font-medium text-gray-400 mb-1">Funcionário</label>
             <select name="employeeId" value={filters.employeeId} onChange={handleFilterChange} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white">
               <option value="all">Todos</option>
-              {initialEmployees.map(emp => (
+              {employees.map(emp => (
                   <option key={emp.id} value={emp.id}>{emp.name}</option>
               ))}
             </select>
@@ -149,6 +168,7 @@ const CommissionReport: React.FC = () => {
       
       <Card>
         <h2 className="text-lg font-semibold text-white mb-4 flex items-center"><BarChart2 className="h-5 w-5 mr-2 text-cyan-400" />Resultados</h2>
+        {loading ? <div className="text-center p-8"><Loader className="animate-spin h-6 w-6 mx-auto"/></div> :
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
@@ -181,7 +201,7 @@ const CommissionReport: React.FC = () => {
                 </tr>
             </tfoot>
           </table>
-        </div>
+        </div>}
       </Card>
     </div>
   );

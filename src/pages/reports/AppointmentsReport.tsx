@@ -1,22 +1,43 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Card from '../../components/Card';
-import { Filter, Printer, FileDown, BarChart2, CheckCircle, XCircle, Calendar, MessageSquare } from 'lucide-react';
-import { appointmentApi, Appointment } from '../../data/mockAppointments';
-import { initialClients } from '../../data/mockClients';
-import { initialEmployees } from '../../data/mockEmployees';
-import { initialServices } from '../../data/mockServices';
+import { Filter, Printer, FileDown, BarChart2, CheckCircle, XCircle, Calendar, MessageSquare, Loader } from 'lucide-react';
+import { supabase } from '../../lib/supabaseClient';
+import { Tables } from '../../types/database.types';
 import { exportToPdf, shareToWhatsApp } from '../../utils/reportExporter';
 
+type AppointmentWithDetails = Tables<'appointments'> & {
+  clients: Pick<Tables<'clients'>, 'name'> | null;
+  employees: Pick<Tables<'employees'>, 'name'> | null;
+  appointment_items: (Pick<Tables<'appointment_items'>, 'item_name'> & {
+      services: Pick<Tables<'services'>, 'name'> | null;
+  })[];
+};
+
 const AppointmentsReport: React.FC = () => {
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [appointments, setAppointments] = useState<AppointmentWithDetails[]>([]);
   const [filters, setFilters] = useState({
-    startDate: '2025-08-01',
-    endDate: '2025-08-31',
+    startDate: new Date(new Date().setDate(1)).toISOString().split('T')[0],
+    endDate: new Date().toISOString().split('T')[0],
     status: 'all',
   });
 
-  React.useEffect(() => {
-    appointmentApi.getAppointments().then(setAppointments);
+  useEffect(() => {
+    const fetchAppointments = async () => {
+        setLoading(true);
+        const { data, error } = await supabase
+            .from('appointments')
+            .select(`
+                *,
+                clients (name),
+                employees (name),
+                appointment_items (item_name, services(name))
+            `);
+        if (error) alert('Erro ao buscar agendamentos.');
+        else setAppointments(data as any || []);
+        setLoading(false);
+    };
+    fetchAppointments();
   }, []);
 
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -25,13 +46,13 @@ const AppointmentsReport: React.FC = () => {
 
   const filteredAppointments = useMemo(() => {
     return appointments.filter(apt => {
-      const aptDate = apt.start;
+      const aptDate = new Date(apt.start_time);
       const start = new Date(filters.startDate);
       const end = new Date(filters.endDate);
       end.setHours(23, 59, 59, 999);
       
       const dateMatch = aptDate >= start && aptDate <= end;
-      const statusMatch = filters.status === 'all' || apt.appointmentStatus === filters.status;
+      const statusMatch = filters.status === 'all' || apt.status === filters.status;
       
       return dateMatch && statusMatch;
     });
@@ -39,8 +60,8 @@ const AppointmentsReport: React.FC = () => {
 
   const summary = useMemo(() => {
     const total = filteredAppointments.length;
-    const concluded = filteredAppointments.filter(a => a.appointmentStatus === 'concluido').length;
-    const canceled = filteredAppointments.filter(a => a.appointmentStatus === 'cancelado').length;
+    const concluded = filteredAppointments.filter(a => a.status === 'concluido').length;
+    const canceled = filteredAppointments.filter(a => a.status === 'cancelado').length;
     const conclusionRate = total > 0 ? (concluded / total) * 100 : 0;
     const cancellationRate = total > 0 ? (canceled / total) * 100 : 0;
     return { total, concluded, canceled, conclusionRate, cancellationRate };
@@ -49,18 +70,19 @@ const AppointmentsReport: React.FC = () => {
   const statusConfig = {
     agendado: { color: 'bg-sky-900/50 text-sky-300', label: 'Agendado' },
     cancelado: { color: 'bg-red-900/50 text-red-300', label: 'Cancelado' },
-    concluido: { color: 'bg-gray-700 text-gray-400', label: 'Concluído' },
+    concluido: { color: 'bg-green-900/50 text-green-300', label: 'Concluído' },
+    'no-show': { color: 'bg-yellow-900/50 text-yellow-300', label: 'Não Compareceu' },
   };
 
   const handleExportPdf = () => {
     const title = 'Relatório de Agendamentos';
     const headers = ['Data', 'Cliente', 'Serviço', 'Funcionário', 'Status'];
     const data = filteredAppointments.map(apt => [
-      apt.start.toLocaleDateString('pt-BR'),
-      initialClients.find(c => c.id === apt.clientId)?.name || 'N/A',
-      initialServices.find(s => s.id === apt.serviceId)?.name || 'N/A',
-      initialEmployees.find(e => e.id === apt.employeeId)?.name || 'N/A',
-      statusConfig[apt.appointmentStatus].label
+      new Date(apt.start_time).toLocaleDateString('pt-BR'),
+      apt.clients?.name || 'N/A',
+      apt.appointment_items.map(i => i.services?.name).join(', ') || 'N/A',
+      apt.employees?.name || 'N/A',
+      statusConfig[apt.status].label
     ]);
     exportToPdf(title, headers, data);
   };
@@ -72,8 +94,8 @@ const AppointmentsReport: React.FC = () => {
     text += `*Taxa de Cancelamento:* ${summary.cancellationRate.toFixed(1)}%\n\n`;
     text += `*Lista de Agendamentos:*\n`;
     filteredAppointments.slice(0, 10).forEach(apt => {
-        const clientName = initialClients.find(c => c.id === apt.clientId)?.name || 'N/A';
-        text += `- ${apt.start.toLocaleDateString('pt-BR')} - ${clientName} (${statusConfig[apt.appointmentStatus].label})\n`;
+        const clientName = apt.clients?.name || 'N/A';
+        text += `- ${new Date(apt.start_time).toLocaleDateString('pt-BR')} - ${clientName} (${statusConfig[apt.status].label})\n`;
     });
     if(filteredAppointments.length > 10) text += `... e mais ${filteredAppointments.length-10} agendamentos.\n`
     shareToWhatsApp(text);
@@ -110,6 +132,7 @@ const AppointmentsReport: React.FC = () => {
               <option value="agendado">Agendado</option>
               <option value="concluido">Concluído</option>
               <option value="cancelado">Cancelado</option>
+              <option value="no-show">Não Compareceu</option>
             </select>
           </div>
         </div>
@@ -123,6 +146,7 @@ const AppointmentsReport: React.FC = () => {
 
       <Card>
         <h2 className="text-lg font-semibold text-white mb-4 flex items-center"><BarChart2 className="h-5 w-5 mr-2 text-cyan-400" />Resultados</h2>
+        {loading ? <div className="text-center p-8"><Loader className="animate-spin h-6 w-6 mx-auto"/></div> :
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
@@ -136,18 +160,16 @@ const AppointmentsReport: React.FC = () => {
             </thead>
             <tbody>
               {filteredAppointments.map((apt) => {
-                const client = initialClients.find(c => c.id === apt.clientId);
-                const service = initialServices.find(s => s.id === apt.serviceId);
-                const employee = initialEmployees.find(e => e.id === apt.employeeId);
+                const serviceNames = apt.appointment_items.map(i => i.services?.name).join(', ');
                 return (
                   <tr key={apt.id} className="border-b border-gray-800 hover:bg-gray-800/50">
-                    <td className="p-4 text-white font-medium">{apt.start.toLocaleDateString('pt-BR')}</td>
-                    <td className="p-4 text-white">{client?.name || 'N/A'}</td>
-                    <td className="p-4 text-white">{service?.name || 'N/A'}</td>
-                    <td className="p-4 text-white">{employee?.name || 'N/A'}</td>
+                    <td className="p-4 text-white font-medium">{new Date(apt.start_time).toLocaleDateString('pt-BR')}</td>
+                    <td className="p-4 text-white">{apt.clients?.name || 'N/A'}</td>
+                    <td className="p-4 text-white">{serviceNames || 'N/A'}</td>
+                    <td className="p-4 text-white">{apt.employees?.name || 'N/A'}</td>
                     <td className="p-4">
-                      <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${statusConfig[apt.appointmentStatus].color}`}>
-                        {statusConfig[apt.appointmentStatus].label}
+                      <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${statusConfig[apt.status].color}`}>
+                        {statusConfig[apt.status].label}
                       </span>
                     </td>
                   </tr>
@@ -155,7 +177,7 @@ const AppointmentsReport: React.FC = () => {
               })}
             </tbody>
           </table>
-        </div>
+        </div>}
       </Card>
     </div>
   );

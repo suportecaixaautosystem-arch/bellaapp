@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Card from '../../components/Card';
 import { Plus, Edit, Trash2, Search, Filter, Calendar, Repeat, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface AccountReceivable {
   id: number;
@@ -22,6 +23,7 @@ const initialAccounts: AccountReceivable[] = [
 ];
 
 const AccountsReceivable: React.FC = () => {
+  const { profile } = useAuth();
   const [accounts, setAccounts] = useState<AccountReceivable[]>(initialAccounts);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<AccountReceivable | null>(null);
@@ -30,6 +32,8 @@ const AccountsReceivable: React.FC = () => {
     description: '', amount: '', dueDate: '', category: '', status: 'pendente', recurring: false
   });
   const [errors, setErrors] = useState({ description: '', amount: '', dueDate: '', category: '' });
+
+  const canEditOrDelete = profile?.role === 'admin' || profile?.role === 'manager';
 
   useEffect(() => {
     if (editingAccount) {
@@ -82,6 +86,7 @@ const AccountsReceivable: React.FC = () => {
     };
 
     if (editingAccount) {
+      if (!canEditOrDelete) { alert("Você não tem permissão para editar."); return; }
       setAccounts(accounts.map(acc => acc.id === editingAccount.id ? { ...editingAccount, ...accountData } : acc));
     } else {
       const newAccount: AccountReceivable = { id: Date.now(), ...accountData };
@@ -91,12 +96,14 @@ const AccountsReceivable: React.FC = () => {
   };
 
   const handleDelete = (id: number) => {
+    if (!canEditOrDelete) { alert("Você não tem permissão para excluir."); return; }
     if (window.confirm('Tem certeza que deseja excluir esta conta?')) {
       setAccounts(accounts.filter(acc => acc.id !== id));
     }
   };
 
   const openModal = (account: AccountReceivable | null = null) => {
+    if (account && !canEditOrDelete) { alert("Você não tem permissão para editar."); return; }
     setEditingAccount(account);
     setIsModalOpen(true);
   };
@@ -209,7 +216,14 @@ const AccountsReceivable: React.FC = () => {
                   <td className="p-4 text-green-400 font-semibold">R$ {account.amount.toFixed(2)}</td>
                   <td className="p-4 text-white">{formatDate(account.dueDate)}</td>
                   <td className="p-4"><span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${account.status === 'recebido' ? 'bg-green-900/50 text-green-300' : account.status === 'vencido' ? 'bg-red-900/50 text-red-300' : 'bg-yellow-900/50 text-yellow-300'}`}>{account.status.charAt(0).toUpperCase() + account.status.slice(1)}</span></td>
-                  <td className="p-4 text-white"><div className="flex justify-end space-x-2"><button onClick={() => openModal(account)} className="p-2 hover:bg-gray-700 rounded-lg"><Edit className="h-4 w-4 text-blue-400" /></button><button onClick={() => handleDelete(account.id)} className="p-2 hover:bg-gray-700 rounded-lg"><Trash2 className="h-4 w-4 text-red-500" /></button></div></td>
+                  <td className="p-4 text-white">
+                    {canEditOrDelete && (
+                    <div className="flex justify-end space-x-2">
+                      <button onClick={() => openModal(account)} className="p-2 hover:bg-gray-700 rounded-lg"><Edit className="h-4 w-4 text-blue-400" /></button>
+                      <button onClick={() => handleDelete(account.id)} className="p-2 hover:bg-gray-700 rounded-lg"><Trash2 className="h-4 w-4 text-red-500" /></button>
+                    </div>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

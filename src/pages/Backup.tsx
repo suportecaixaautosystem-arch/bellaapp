@@ -1,54 +1,50 @@
-import React from 'react';
+import React, { useState } from 'react';
 import Card from '../components/Card';
-import { Download, Upload, Info } from 'lucide-react';
-
-// Import all mock data
-import { initialClients } from '../data/mockClients';
-import { initialServices } from '../data/mockServices';
-import { initialProducts } from '../data/mockProducts';
-import { initialServiceCombos, initialProductCombos } from '../data/mockCombos';
-import { initialEmployees } from '../data/mockEmployees';
-import { initialSpecialties } from '../data/mockSpecialties';
-import { initialPaymentMethods } from './configurations/PaymentMethods';
-import { appointmentApi } from '../data/mockAppointments';
-import { mockSales } from '../data/mockSales';
-// Assume financial data is also available for backup
-// For this example, we'll just use some static data.
-const mockPayable = [{ id: 1, description: 'Aluguel', amount: 1200 }];
-const mockReceivable = [{ id: 1, description: 'Venda', amount: 60 }];
+import { Download, Upload, Info, Loader } from 'lucide-react';
+import { supabase } from '../lib/supabaseClient';
 
 const Backup: React.FC = () => {
+  const [loading, setLoading] = useState(false);
 
   const handleBackup = async () => {
-    const appointments = await appointmentApi.getAppointments();
+    setLoading(true);
+    try {
+      const tablesToBackup = [
+        'clients', 'services', 'products', 'service_combos', 'product_combos', 
+        'employees', 'specialties', 'payment_methods', 'appointments', 'appointment_items',
+        'sales', 'sale_items', 'financial_transactions', 'companies', 'bot_settings',
+        'employee_services', 'employee_specialties', 'product_combo_items', 'service_combo_items'
+      ];
 
-    const fullBackup = {
-      clients: initialClients,
-      services: initialServices,
-      products: initialProducts,
-      serviceCombos: initialServiceCombos,
-      productCombos: initialProductCombos,
-      employees: initialEmployees,
-      specialties: initialSpecialties,
-      paymentMethods: initialPaymentMethods,
-      appointments: appointments,
-      sales: mockSales,
-      accountsPayable: mockPayable,
-      accountsReceivable: mockReceivable,
-      backupDate: new Date().toISOString(),
-    };
+      const backupData: Record<string, any> = {
+        backupDate: new Date().toISOString(),
+      };
 
-    const jsonString = JSON.stringify(fullBackup, null, 2);
-    const blob = new Blob([jsonString], { type: 'application/json' });
-    const href = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = href;
-    const date = new Date().toISOString().split('T')[0];
-    link.download = `barber_bella_backup_${date}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(href);
+      for (const table of tablesToBackup) {
+        const { data, error } = await supabase.from(table).select('*');
+        if (error) {
+          throw new Error(`Error fetching ${table}: ${error.message}`);
+        }
+        backupData[table] = data;
+      }
+
+      const jsonString = JSON.stringify(backupData, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = href;
+      const date = new Date().toISOString().split('T')[0];
+      link.download = `barber_bella_backup_${date}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(href);
+
+    } catch (error: any) {
+      alert(`Erro ao realizar o backup: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -70,10 +66,11 @@ const Backup: React.FC = () => {
             </p>
             <button
               onClick={handleBackup}
-              className="bg-sky-600 text-white px-6 py-2 rounded-lg hover:bg-sky-700 transition-colors flex items-center space-x-2"
+              disabled={loading}
+              className="bg-sky-600 text-white px-6 py-2 rounded-lg hover:bg-sky-700 transition-colors flex items-center space-x-2 disabled:opacity-50 disabled:cursor-wait"
             >
-              <Download className="h-4 w-4" />
-              <span>Baixar Backup Agora</span>
+              {loading ? <Loader className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              <span>{loading ? 'Gerando Backup...' : 'Baixar Backup Agora'}</span>
             </button>
           </div>
         </div>

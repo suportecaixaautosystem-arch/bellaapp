@@ -2,34 +2,53 @@ import React, { useState, useEffect } from 'react';
 import Card from '../../components/Card';
 import { Plus, Search, Edit, Trash2, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { initialClients as mockClients } from '../../data/mockClients';
+import { supabase } from '../../lib/supabaseClient';
+import { Tables, TablesInsert, TablesUpdate } from '../../types/database.types';
+import { phoneMask } from '../../utils/validators';
+import { useAuth } from '../../contexts/AuthContext';
 
-interface Client {
-  id: number;
-  name: string;
-  email: string;
-  phone: string;
-  active: boolean;
-}
+type Client = Tables<'clients'>;
 
 const Clients: React.FC = () => {
-  const [clients, setClients] = useState<Client[]>(mockClients);
+  const { profile } = useAuth();
+  const [clients, setClients] = useState<Client[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
-  const [newClient, setNewClient] = useState({ name: '', email: '', phone: '' });
+  
+  const [formState, setFormState] = useState<Omit<TablesInsert<'clients'>, 'id' | 'company_id' | 'created_at' | 'updated_at' | 'is_active'>>({ name: '', email: '', phone: '' });
   const [errors, setErrors] = useState({ name: '', phone: '' });
+
+  const canEditOrDelete = profile?.role === 'admin' || profile?.role === 'manager';
+
+  const fetchClients = async () => {
+    setLoading(true);
+    const { data, error } = await supabase.from('clients').select('*').order('created_at', { ascending: false });
+    if (error) {
+      console.error('Error fetching clients:', error.message);
+      alert('Erro ao buscar clientes.');
+    } else {
+      setClients(data || []);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchClients();
+  }, []);
 
   useEffect(() => {
     if (editingClient) {
-      setNewClient({ name: editingClient.name, email: editingClient.email, phone: editingClient.phone });
+      setFormState({ name: editingClient.name, email: editingClient.email, phone: editingClient.phone });
     } else {
-      setNewClient({ name: '', email: '', phone: '' });
+      setFormState({ name: '', email: '', phone: '' });
     }
   }, [editingClient]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    setNewClient(prevState => ({ ...prevState, [name]: value }));
+    const maskedValue = name === 'phone' ? phoneMask(value) : value;
+    setFormState(prevState => ({ ...prevState, [name]: maskedValue }));
     if (value) {
       setErrors(prev => ({ ...prev, [name]: '' }));
     }
@@ -38,42 +57,65 @@ const Clients: React.FC = () => {
   const validateForm = () => {
     const newErrors = { name: '', phone: '' };
     let isValid = true;
-    if (!newClient.name.trim()) {
+    if (!formState.name.trim()) {
       newErrors.name = 'Nome é obrigatório';
       isValid = false;
     }
-    if (!newClient.phone.trim()) {
-      newErrors.phone = 'Telefone é obrigatório';
+    const phoneDigits = formState.phone?.replace(/\D/g, '') || '';
+    if (phoneDigits.length < 10) {
+      newErrors.phone = 'Telefone inválido. Deve ter no mínimo 10 dígitos.';
       isValid = false;
     }
     setErrors(newErrors);
     return isValid;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
 
+    const clientData = { ...formState, company_id: 1 }; // Assuming company_id 1
+
     if (editingClient) {
-      setClients(clients.map(c => c.id === editingClient.id ? { ...editingClient, ...newClient } : c));
+      if (!canEditOrDelete) { alert("Você não tem permissão para editar."); return; }
+      const { error } = await supabase.from('clients').update(clientData).eq('id', editingClient.id);
+      if (error) {
+        alert(`Erro ao atualizar cliente: ${error.message}`);
+      }
     } else {
-      const clientToAdd: Client = { id: Date.now(), ...newClient, active: true };
-      setClients(prevClients => [clientToAdd, ...prevClients]);
+      const { error } = await supabase.from('clients').insert(clientData);
+      if (error) {
+        alert(`Erro ao criar cliente: ${error.message}`);
+      }
     }
     closeModal();
+    fetchClients();
   };
   
-  const handleToggleActive = (id: number) => {
-    setClients(clients.map(c => c.id === id ? { ...c, active: !c.active } : c));
+  const handleToggleActive = async (id: number, currentStatus: boolean) => {
+    if (!canEditOrDelete) { alert("Você não tem permissão para alterar o status."); return; }
+    const { error } = await supabase.from('clients').update({ is_active: !currentStatus }).eq('id', id);
+    if (error) {
+      alert(`Erro ao alterar status: ${error.message}`);
+    } else {
+      fetchClients();
+    }
   };
   
-  const handleDelete = (id: number) => {
+  const handleDelete = async (id: number) => {
+    if (!canEditOrDelete) { alert("Você não tem permissão para excluir."); return; }
     if (window.confirm('Tem certeza que deseja excluir este cliente? Esta ação não pode ser desfeita.')) {
-      setClients(clients.filter(c => c.id !== id));
+      const { error } = await supabase.from('clients').delete().eq('id', id);
+      if (error) {
+        alert(`Erro ao excluir cliente: ${error.message}`);
+      } else {
+        fetchClients();
+      }
     }
   };
 
   const openModal = (client: Client | null = null) => {
+    if (client && !canEditOrDelete) { alert("Você não tem permissão para editar."); return; }
     setEditingClient(client);
     setIsModalOpen(true);
   };
@@ -81,7 +123,7 @@ const Clients: React.FC = () => {
   const closeModal = () => {
     setIsModalOpen(false);
     setEditingClient(null);
-    setNewClient({ name: '', email: '', phone: '' });
+    setFormState({ name: '', email: '', phone: '' });
     setErrors({ name: '', phone: '' });
   };
 
@@ -110,6 +152,7 @@ const Clients: React.FC = () => {
             className="pl-10 pr-4 py-2 w-full bg-gray-800 border border-gray-700 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent text-white"
           />
         </div>
+        {loading ? <p>Carregando clientes...</p> : (
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
@@ -123,20 +166,24 @@ const Clients: React.FC = () => {
             </thead>
             <tbody>
               {clients.map((client) => (
-                <tr key={client.id} className={`border-b border-gray-800 hover:bg-gray-800/50 ${!client.active ? 'opacity-50' : ''}`}>
+                <tr key={client.id} className={`border-b border-gray-800 hover:bg-gray-800/50 ${!client.is_active ? 'opacity-50' : ''}`}>
                   <td className="p-4 text-white">{client.name}</td>
                   <td className="p-4 text-white">{client.email}</td>
                   <td className="p-4 text-white">{client.phone}</td>
                   <td className="p-4">
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" checked={client.active} onChange={() => handleToggleActive(client.id)} className="sr-only peer" />
+                      <input type="checkbox" checked={client.is_active ?? false} onChange={() => handleToggleActive(client.id, client.is_active ?? false)} disabled={!canEditOrDelete} className="sr-only peer" />
                       <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-sky-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
                     </label>
                   </td>
                   <td className="p-4 text-white">
                     <div className="flex justify-end space-x-2">
-                      <button onClick={() => openModal(client)} className="p-2 hover:bg-gray-700 rounded-lg"><Edit className="h-4 w-4 text-blue-400" /></button>
-                      <button onClick={() => handleDelete(client.id)} className="p-2 hover:bg-gray-700 rounded-lg"><Trash2 className="h-4 w-4 text-red-500" /></button>
+                      {canEditOrDelete && (
+                        <>
+                          <button onClick={() => openModal(client)} className="p-2 hover:bg-gray-700 rounded-lg"><Edit className="h-4 w-4 text-blue-400" /></button>
+                          <button onClick={() => handleDelete(client.id)} className="p-2 hover:bg-gray-700 rounded-lg"><Trash2 className="h-4 w-4 text-red-500" /></button>
+                        </>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -144,6 +191,7 @@ const Clients: React.FC = () => {
             </tbody>
           </table>
         </div>
+        )}
       </Card>
 
       <AnimatePresence>
@@ -174,7 +222,7 @@ const Clients: React.FC = () => {
                   <input
                     type="text"
                     name="name"
-                    value={newClient.name}
+                    value={formState.name}
                     onChange={handleInputChange}
                     placeholder="Nome completo do cliente"
                     className={`w-full bg-gray-800 border rounded-lg px-3 py-2 focus:ring-2 focus:border-transparent text-white ${errors.name ? 'border-red-500 focus:ring-red-500' : 'border-gray-700 focus:ring-cyan-500'}`}
@@ -186,7 +234,7 @@ const Clients: React.FC = () => {
                   <input
                     type="email"
                     name="email"
-                    value={newClient.email}
+                    value={formState.email ?? ''}
                     onChange={handleInputChange}
                     placeholder="email@example.com"
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent text-white"
@@ -197,7 +245,7 @@ const Clients: React.FC = () => {
                   <input
                     type="tel"
                     name="phone"
-                    value={newClient.phone}
+                    value={formState.phone ?? ''}
                     onChange={handleInputChange}
                     placeholder="(00) 90000-0000"
                     className={`w-full bg-gray-800 border rounded-lg px-3 py-2 focus:ring-2 focus:border-transparent text-white ${errors.phone ? 'border-red-500 focus:ring-red-500' : 'border-gray-700 focus:ring-cyan-500'}`}

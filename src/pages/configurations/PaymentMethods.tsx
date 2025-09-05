@@ -2,47 +2,43 @@ import React, { useState, useEffect } from 'react';
 import Card from '../../components/Card';
 import { Plus, Edit, Trash2, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { supabase } from '../../lib/supabaseClient';
+import { Tables, TablesInsert } from '../../types/database.types';
 
-interface PaymentMethod {
-  id: number;
-  name: string;
-  description: string;
-  active: boolean;
-}
-
-export const initialPaymentMethods: PaymentMethod[] = [
-    { id: 1, name: 'Dinheiro', description: 'Pagamento em espécie', active: true },
-    { id: 2, name: 'Cartão de Crédito', description: 'Visa, Mastercard, Elo, etc.', active: true },
-    { id: 3, name: 'Cartão de Débito', description: 'Visa, Mastercard, Elo, etc.', active: true },
-    { id: 4, name: 'PIX', description: 'Transferência instantânea', active: true },
-    { id: 5, name: 'Cheque', description: 'Pagamento com cheque', active: false },
-];
+type PaymentMethod = Tables<'payment_methods'>;
 
 const PaymentMethods: React.FC = () => {
-  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(initialPaymentMethods);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingMethod, setEditingMethod] = useState<PaymentMethod | null>(null);
-  const [newMethod, setNewMethod] = useState({ name: '', description: '', active: true });
+  const [newMethod, setNewMethod] = useState<Omit<TablesInsert<'payment_methods'>, 'id' | 'company_id' | 'created_at' | 'is_active'>>({ name: '', description: '' });
   const [errors, setErrors] = useState({ name: '' });
+
+  const fetchPaymentMethods = async () => {
+    setLoading(true);
+    const { data, error } = await supabase.from('payment_methods').select('*').order('name');
+    if (error) console.error('Error fetching payment methods:', error);
+    else setPaymentMethods(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchPaymentMethods();
+  }, []);
 
   useEffect(() => {
     if (editingMethod) {
-      setNewMethod({ name: editingMethod.name, description: editingMethod.description, active: editingMethod.active });
+      setNewMethod({ name: editingMethod.name, description: editingMethod.description || '' });
     } else {
-      setNewMethod({ name: '', description: '', active: true });
+      setNewMethod({ name: '', description: '' });
     }
   }, [editingMethod]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setNewMethod(prevState => ({ ...prevState, [name]: value }));
-    if (value) {
-      setErrors(prev => ({ ...prev, [name]: '' }));
-    }
-  };
-  
-  const handleToggleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setNewMethod(prevState => ({ ...prevState, active: e.target.checked }));
+    if (value) setErrors(prev => ({ ...prev, [name]: '' }));
   };
 
   const validateForm = () => {
@@ -56,26 +52,34 @@ const PaymentMethods: React.FC = () => {
     return isValid;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
 
+    const methodData = { ...newMethod, company_id: 1 };
+
     if (editingMethod) {
-      setPaymentMethods(paymentMethods.map(m => m.id === editingMethod.id ? { ...editingMethod, ...newMethod } : m));
+      const { error } = await supabase.from('payment_methods').update(methodData).eq('id', editingMethod.id);
+      if (error) alert(`Erro ao atualizar método: ${error.message}`);
     } else {
-      const methodToAdd: PaymentMethod = { id: Date.now(), ...newMethod };
-      setPaymentMethods(prevMethods => [methodToAdd, ...prevMethods]);
+      const { error } = await supabase.from('payment_methods').insert(methodData);
+      if (error) alert(`Erro ao criar método: ${error.message}`);
     }
     closeModal();
+    fetchPaymentMethods();
   };
 
-  const handleToggleActive = (id: number) => {
-    setPaymentMethods(paymentMethods.map(m => m.id === id ? { ...m, active: !m.active } : m));
+  const handleToggleActive = async (id: number, currentStatus: boolean) => {
+    const { error } = await supabase.from('payment_methods').update({ is_active: !currentStatus }).eq('id', id);
+    if (error) alert(`Erro ao alterar status: ${error.message}`);
+    else fetchPaymentMethods();
   };
 
-  const handleDelete = (id: number) => {
+  const handleDelete = async (id: number) => {
     if (window.confirm('Tem certeza que deseja excluir este método de pagamento?')) {
-      setPaymentMethods(paymentMethods.filter(m => m.id !== id));
+      const { error } = await supabase.from('payment_methods').delete().eq('id', id);
+      if (error) alert(`Erro ao excluir método: ${error.message}`);
+      else fetchPaymentMethods();
     }
   };
 
@@ -87,8 +91,6 @@ const PaymentMethods: React.FC = () => {
   const closeModal = () => {
     setIsModalOpen(false);
     setEditingMethod(null);
-    setNewMethod({ name: '', description: '', active: true });
-    setErrors({ name: '' });
   };
 
   return (
@@ -108,6 +110,7 @@ const PaymentMethods: React.FC = () => {
       </div>
 
       <Card>
+        {loading ? <p>Carregando...</p> : (
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
@@ -120,12 +123,12 @@ const PaymentMethods: React.FC = () => {
             </thead>
             <tbody>
               {paymentMethods.map((method) => (
-                <tr key={method.id} className={`border-b border-gray-800 hover:bg-gray-800/50 ${!method.active ? 'opacity-50' : ''}`}>
+                <tr key={method.id} className={`border-b border-gray-800 hover:bg-gray-800/50 ${!method.is_active ? 'opacity-50' : ''}`}>
                   <td className="p-4 text-white font-medium">{method.name}</td>
                   <td className="p-4 text-gray-300">{method.description}</td>
                   <td className="p-4">
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" checked={method.active} onChange={() => handleToggleActive(method.id)} className="sr-only peer" />
+                      <input type="checkbox" checked={method.is_active ?? false} onChange={() => handleToggleActive(method.id, method.is_active ?? false)} className="sr-only peer" />
                       <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-sky-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
                     </label>
                   </td>
@@ -140,6 +143,7 @@ const PaymentMethods: React.FC = () => {
             </tbody>
           </table>
         </div>
+        )}
       </Card>
 
       <AnimatePresence>
@@ -188,13 +192,6 @@ const PaymentMethods: React.FC = () => {
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent text-white"
                   />
                 </div>
-                <div className="flex items-center space-x-4">
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" checked={newMethod.active} onChange={handleToggleChange} className="sr-only peer" />
-                      <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-sky-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
-                    </label>
-                    <span className="font-medium text-white">Ativo</span>
-                  </div>
                 <div className="flex justify-end space-x-4 pt-4">
                   <button
                     type="button"

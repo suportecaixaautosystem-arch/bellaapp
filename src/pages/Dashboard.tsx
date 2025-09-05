@@ -1,23 +1,52 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import Card from '../components/Card';
 import { Link } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
-import { DollarSign, Calendar, Users, BarChart, Star, Target, Clock, User, Scissors } from 'lucide-react';
+import { DollarSign, Calendar, Users, BarChart, Star, Target, Clock } from 'lucide-react';
+import { supabase } from '../lib/supabaseClient';
+import { Tables } from '../types/database.types';
 
-// Mock Data
-import { mockSales } from '../data/mockSales';
-import { appointmentApi } from '../data/mockAppointments';
-import { initialClients } from '../data/mockClients';
-import { initialServices } from '../data/mockServices';
+type Sale = Tables<'sales'> & { sale_items: Tables<'sale_items'>[] };
+type Appointment = Tables<'appointments'>;
 
 const Dashboard: React.FC = () => {
-    const [appointments, setAppointments] = React.useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [sales, setSales] = useState<Sale[]>([]);
+    const [appointments, setAppointments] = useState<Appointment[]>([]);
+    const [clients, setClients] = useState<Tables<'clients'>[]>([]);
+    const [services, setServices] = useState<Tables<'services'>[]>([]);
 
-    React.useEffect(() => {
-        appointmentApi.getAppointments().then(setAppointments);
+    useEffect(() => {
+        const fetchData = async () => {
+            setLoading(true);
+            const today = new Date().toISOString().slice(0, 10);
+
+            const salesPromise = supabase.from('sales').select('*, sale_items(*)');
+            const appointmentsPromise = supabase.from('appointments').select('*');
+            const clientsPromise = supabase.from('clients').select('*');
+            const servicesPromise = supabase.from('services').select('*');
+
+            const [
+                { data: salesData, error: salesError },
+                { data: appointmentsData, error: appointmentsError },
+                { data: clientsData, error: clientsError },
+                { data: servicesData, error: servicesError },
+            ] = await Promise.all([salesPromise, appointmentsPromise, clientsPromise, servicesPromise]);
+
+            if (salesError) console.error('Error fetching sales:', salesError.message);
+            if (appointmentsError) console.error('Error fetching appointments:', appointmentsError.message);
+            if (clientsError) console.error('Error fetching clients:', clientsError.message);
+            if (servicesError) console.error('Error fetching services:', servicesError.message);
+
+            setSales(salesData || []);
+            setAppointments(appointmentsData || []);
+            setClients(clientsData || []);
+            setServices(servicesData || []);
+            setLoading(false);
+        };
+
+        fetchData();
     }, []);
-
-    const today = new Date('2025-08-01T12:00:00'); // Fixed date for consistent mock data
 
     const {
         dailyRevenue,
@@ -25,25 +54,27 @@ const Dashboard: React.FC = () => {
         dailyAverageTicket,
         newClientsToday
     } = useMemo(() => {
-        const todayStr = today.toDateString();
-        const salesToday = mockSales.filter(s => s.date.toDateString() === todayStr);
+        const todayStr = new Date().toDateString();
+        const salesToday = sales.filter(s => new Date(s.created_at!).toDateString() === todayStr);
         const revenue = salesToday.reduce((acc, sale) => acc + sale.total, 0);
-        const appointmentsToday = appointments.filter(a => new Date(a.start).toDateString() === todayStr);
-        
+        const appointmentsToday = appointments.filter(a => new Date(a.start_time).toDateString() === todayStr);
+        const clientsToday = clients.filter(c => new Date(c.created_at!).toDateString() === todayStr);
+
         return {
             dailyRevenue: revenue,
             dailyAppointmentsCount: appointmentsToday.length,
             dailyAverageTicket: salesToday.length > 0 ? revenue / salesToday.length : 0,
-            newClientsToday: 2 // Mocked value
+            newClientsToday: clientsToday.length
         };
-    }, [appointments, today]);
+    }, [sales, appointments, clients]);
 
     const weeklyRevenueData = useMemo(() => {
         const data: Record<string, number> = { 'Dom': 0, 'Seg': 0, 'Ter': 0, 'Qua': 0, 'Qui': 0, 'Sex': 0, 'Sáb': 0 };
         const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
         
-        mockSales.forEach(sale => {
-            const dayName = dayNames[sale.date.getDay()];
+        sales.forEach(sale => {
+            const saleDate = new Date(sale.created_at!);
+            const dayName = dayNames[saleDate.getDay()];
             data[dayName] = (data[dayName] || 0) + sale.total;
         });
 
@@ -51,14 +82,14 @@ const Dashboard: React.FC = () => {
             labels: Object.keys(data),
             values: Object.values(data)
         };
-    }, []);
+    }, [sales]);
 
     const topServices = useMemo(() => {
         const serviceCounts: Record<string, number> = {};
-        mockSales.forEach(sale => {
-            sale.items.forEach(item => {
-                if (item.type === 'service' || item.type === 'combo') {
-                    serviceCounts[item.name] = (serviceCounts[item.name] || 0) + 1;
+        sales.forEach(sale => {
+            sale.sale_items.forEach(item => {
+                if (item.service_id || item.service_combo_id) {
+                    serviceCounts[item.item_name] = (serviceCounts[item.item_name] || 0) + 1;
                 }
             });
         });
@@ -66,10 +97,10 @@ const Dashboard: React.FC = () => {
             .sort(([, a], [, b]) => b - a)
             .slice(0, 5)
             .map(([name, count]) => ({ name, count }));
-    }, []);
+    }, [sales]);
 
     const monthlyGoal = 30000;
-    const monthlyRevenue = mockSales.reduce((acc, sale) => acc + sale.total, 0);
+    const monthlyRevenue = sales.reduce((acc, sale) => acc + sale.total, 0);
     const goalProgress = (monthlyRevenue / monthlyGoal) * 100;
 
     const chartOption = {
@@ -108,10 +139,15 @@ const Dashboard: React.FC = () => {
     };
 
     const todayAppointments = useMemo(() => {
+        const todayStr = new Date().toDateString();
         return appointments
-            .filter(a => new Date(a.start).toDateString() === today.toDateString())
-            .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
-    }, [appointments, today]);
+            .filter(a => new Date(a.start_time).toDateString() === todayStr && a.status === 'agendado')
+            .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+    }, [appointments]);
+
+    if (loading) {
+        return <div className="text-center p-8">Carregando dashboard...</div>;
+    }
 
     return (
         <div className="space-y-8">
@@ -136,7 +172,6 @@ const Dashboard: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Appointments & Top Services */}
                 <div className="lg:col-span-1 space-y-8">
                      <Card>
                         <div className="flex items-center justify-between mb-4">
@@ -145,13 +180,12 @@ const Dashboard: React.FC = () => {
                         </div>
                         <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
                             {todayAppointments.length > 0 ? todayAppointments.map((apt) => {
-                                const client = initialClients.find(c => c.id === apt.clientId);
-                                const service = initialServices.find(s => s.id === apt.serviceId);
+                                const client = clients.find(c => c.id === apt.client_id);
                                 return (
                                     <div key={apt.id} className="flex items-center space-x-3 p-3 bg-gray-800 rounded-lg">
                                         <div className="flex-shrink-0 w-10 h-10 bg-gradient-to-r from-sky-600 to-cyan-500 rounded-full flex items-center justify-center text-white font-bold">{client?.name.charAt(0)}</div>
-                                        <div><p className="font-medium text-white text-sm">{client?.name}</p><p className="text-xs text-gray-400">{service?.name}</p></div>
-                                        <p className="ml-auto text-sm font-medium text-white">{new Date(apt.start).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
+                                        <div><p className="font-medium text-white text-sm">{client?.name}</p><p className="text-xs text-gray-400">Agendamento</p></div>
+                                        <p className="ml-auto text-sm font-medium text-white">{new Date(apt.start_time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
                                     </div>
                                 );
                             }) : <p className="text-center text-gray-500 py-8">Nenhum agendamento para hoje.</p>}
@@ -170,7 +204,6 @@ const Dashboard: React.FC = () => {
                     </Card>
                 </div>
 
-                {/* Main Charts */}
                 <div className="lg:col-span-2 space-y-8">
                     <Card>
                         <h2 className="text-lg font-semibold text-white mb-4">Faturamento Semanal</h2>
